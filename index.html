@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Roots Club M0 Test</title>
+<style>
+  :root { --bg:#0d2419; --card:#143C2B; --gold:#C8A34A; --text:#EDE6D6; --muted:#9fb3a7; --ok:#5fd18b; --bad:#ff7a6b; --warn:#f2c14e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; padding:16px; }
+  h1 { color:var(--gold); font-size:22px; margin:4px 0 2px; }
+  p.sub { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:8px 0 4px; }
+  input, select { width:100%; padding:10px; border-radius:10px; border:1px solid #2e5a45; background:#0d2419; color:var(--text); font-size:15px; }
+  button { width:100%; padding:14px; margin-top:12px; border:0; border-radius:12px; background:var(--gold); color:#14231b; font-weight:700; font-size:17px; }
+  button:disabled { opacity:.5; }
+  .row { display:flex; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid #24503c; font-size:14px; }
+  .row:last-child { border-bottom:0; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  #verdict { font-size:18px; font-weight:700; text-align:center; }
+  details { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<h1>Roots Club · connection test</h1>
+<p class="sub">Tests whether the new app's database (Supabase) works from this phone in China. Nothing personal is sent: only timings and your phone model.</p>
+
+<div class="card">
+  <label for="net">Network</label>
+  <select id="net">
+    <option value="">Choose…</option>
+    <option>Mobile data (4G/5G)</option>
+    <option>Home Wi-Fi</option>
+    <option>Other Wi-Fi</option>
+  </select>
+  <label for="vpn">VPN</label>
+  <select id="vpn">
+    <option value="">Choose…</option>
+    <option>VPN OFF</option>
+    <option>VPN ON</option>
+  </select>
+  <label for="carrier">Carrier (optional)</label>
+  <select id="carrier">
+    <option value="">Not sure</option>
+    <option>China Mobile</option>
+    <option>China Unicom</option>
+    <option>China Telecom</option>
+  </select>
+  <button id="go">Run test</button>
+</div>
+
+<div class="card" id="out" hidden>
+  <div id="verdict"></div>
+  <div id="rows"></div>
+</div>
+
+<details class="card">
+  <summary>Settings</summary>
+  <label for="url">Project URL</label>
+  <input id="url" placeholder="https://xxxx.supabase.co">
+  <label for="key">Publishable (anon) key</label>
+  <input id="key" placeholder="sb_publishable_… or eyJ…">
+</details>
+
+<script>
+// Default project; can be overridden in Settings or with #url=…&key=…
+const DEFAULT_URL = "https://wpljywjwceqdgvcdbopy.supabase.co";
+const DEFAULT_KEY = "sb_publishable_btSzyAr1wu0RaExeJCOWKA_z_B0KHEp";
+
+const $ = id => document.getElementById(id);
+const hash = new URLSearchParams(location.hash.slice(1));
+$("url").value = hash.get("url") || DEFAULT_URL;
+$("key").value = hash.get("key") || DEFAULT_KEY;
+
+function headers(key) {
+  const h = { apikey: key };
+  if (key.startsWith("eyJ")) h.Authorization = "Bearer " + key;
+  return h;
+}
+
+async function timed(fn, ms = 12000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  const start = performance.now();
+  try {
+    const res = await fn(ctrl.signal);
+    return { ok: true, ms: Math.round(performance.now() - start), status: res && res.status };
+  } catch (e) {
+    return { ok: false, ms: Math.round(performance.now() - start), error: e.name === "AbortError" ? "timeout" : String(e.message || e) };
+  } finally { clearTimeout(t); }
+}
+
+function row(name, r, extra = "") {
+  const cls = !r.ok ? "bad" : r.ms > 1500 ? "warn" : "ok";
+  const val = r.ok ? `${r.ms} ms${extra}` : `FAILED (${r.error || "HTTP " + r.status})`;
+  $("rows").insertAdjacentHTML("beforeend", `<div class="row"><span>${name}</span><span class="${cls}">${val}</span></div>`);
+}
+
+const median = a => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+
+$("go").onclick = async () => {
+  const url = $("url").value.trim().replace(/\/$/, "");
+  const key = $("key").value.trim();
+  if (!$("net").value || !$("vpn").value) { alert("Choose the network and the VPN state first."); return; }
+  if (!url || !key) { alert("Project URL or key missing (Settings)."); return; }
+  $("go").disabled = true; $("out").hidden = false; $("rows").innerHTML = ""; $("verdict").textContent = "Testing…";
+  const results = {};
+
+  const nav = performance.getEntriesByType("navigation")[0];
+  results.page_load_ms = nav ? Math.round(nav.loadEventEnd || nav.domContentLoadedEventEnd) : null;
+  row("This page (GitHub Pages)", { ok: true, ms: results.page_load_ms ?? 0 });
+
+  results.dashboard = await timed(s => fetch("https://supabase.com/favicon/favicon.ico?" + Date.now(), { mode: "no-cors", signal: s }));
+  row("supabase.com (dashboard)", results.dashboard);
+
+  results.auth = await timed(async s => {
+    const r = await fetch(`${url}/auth/v1/health`, { headers: headers(key), signal: s });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r;
+  });
+  row("Login service", results.auth);
+
+  const reads = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await timed(async s => {
+      const res = await fetch(`${url}/rest/v1/m0_results?select=id&limit=1`, { headers: headers(key), signal: s, cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      await res.json();
+      return res;
+    });
+    reads.push(r);
+  }
+  const okReads = reads.filter(r => r.ok).map(r => r.ms);
+  results.reads = reads;
+  results.read_ok = okReads.length;
+  results.read_median_ms = okReads.length ? median(okReads) : null;
+  row("Database read (5 tries)", okReads.length ? { ok: true, ms: results.read_median_ms } : reads[reads.length - 1], ` median, ${okReads.length}/5 ok`);
+
+  const payload = {
+    label: [$("net").value, $("vpn").value, $("carrier").value].filter(Boolean).join(" · "),
+    ua: navigator.userAgent.slice(0, 200),
+    results
+  };
+  results.write = await timed(async s => {
+    const res = await fetch(`${url}/rest/v1/m0_results`, {
+      method: "POST", signal: s,
+      headers: { ...headers(key), "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res;
+  });
+  row("Database write (saves this result)", results.write);
+
+  const pass = results.auth.ok && results.read_ok >= 4 && results.write.ok;
+  const slow = pass && results.read_median_ms > 1500;
+  $("verdict").innerHTML = !pass ? '<span class="bad">✗ Does not work on this connection</span>'
+    : slow ? '<span class="warn">~ Works, but slow</span>'
+    : '<span class="ok">✓ Works on this connection</span>';
+  if (!results.write.ok) $("verdict").insertAdjacentHTML("beforeend", '<div class="sub" style="font-size:13px;font-weight:400">Result not saved. Take a screenshot and send it to Claude.</div>');
+  $("go").disabled = false;
+};
+</script>
+</body>
+</html>
